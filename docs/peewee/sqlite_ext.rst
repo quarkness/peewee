@@ -1077,7 +1077,7 @@ APIs
                      .order_by(DocumentIndex.rank()))
 
             for search_result in query:
-                print search_result.title, search_result.score
+                print(search_result.title, search_result.score)
 
     .. py:classmethod:: bm25([col1_weight, col2_weight...coln_weight])
 
@@ -1509,7 +1509,7 @@ APIs
         # Get all ancestors for a particular node.
         laptops = Category.get(Category.name == 'Laptops')
         for parent in Closure.ancestors(laptops):
-            print parent.name
+            print(parent.name)
 
         # Computer Hardware
         # Computers
@@ -1519,7 +1519,7 @@ APIs
         # Get all descendants for a particular node.
         hardware = Category.get(Category.name == 'Computer Hardware')
         for node in Closure.descendants(hardware):
-            print node.name
+            print(node.name)
 
         # Laptops
         # Desktops
@@ -1587,13 +1587,13 @@ APIs
 
     .. note::
         For an in-depth discussion of the SQLite transitive closure extension,
-        check out this blog post, `Querying Tree Structures in SQLite using Python and the Transitive Closure Extension <http://charlesleifer.com/blog/querying-tree-structures-in-sqlite-using-python-and-the-transitive-closure-extension/>`_.
+        check out this blog post, `Querying Tree Structures in SQLite using Python and the Transitive Closure Extension <https://charlesleifer.com/blog/querying-tree-structures-in-sqlite-using-python-and-the-transitive-closure-extension/>`_.
 
 .. _sqlite-lsm1:
 
 .. py:class:: LSMTable()
 
-    :py:class:`VirtualModel` subclass suitable for working with the `lsm1 extension <http://charlesleifer.com/blog/lsm-key-value-storage-in-sqlite3/>`_
+    :py:class:`VirtualModel` subclass suitable for working with the `lsm1 extension <https://charlesleifer.com/blog/lsm-key-value-storage-in-sqlite3/>`_
     The *lsm1* extension is a virtual table that provides a SQL interface to
     the `lsm key/value storage engine from SQLite4 <http://sqlite.org/src4/doc/trunk/www/lsmusr.wiki>`_.
 
@@ -1742,14 +1742,14 @@ APIs
          Row(key='k3', value='v3'),
          Row(key='k9', value='v9')]
 
-    Attempting to get a single non-existant key will result in a ``KeyError``,
+    Attempting to get a single non-existant key will result in a ``DoesNotExist``,
     but slices will not raise an exception:
 
     .. code-block:: pycon
 
         >>> KV['k1']
         ...
-        KeyError: 'k1'
+        KV.DoesNotExist: <Model:KV> instance matching query does not exist: ...
 
         >>> list(KV['k1':'k1'])
         []

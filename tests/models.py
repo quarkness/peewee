@@ -170,6 +170,25 @@ class TestModelAPIs(ModelTestCase):
         names = [u.username for u in User.select().order_by(User.username)]
         self.assertEqual(names, ['u%02d' % i for i in range(100)])
 
+    @requires_models(DfltM)
+    def test_insert_many_defaults_nullable(self):
+        data = [
+            {'name': 'd1'},
+            {'name': 'd2', 'dflt1': 10},
+            {'name': 'd3', 'dflt2': 30},
+            {'name': 'd4', 'dfltn': 40}]
+        fields = [DfltM.name, DfltM.dflt1, DfltM.dflt2, DfltM.dfltn]
+        DfltM.insert_many(data, fields).execute()
+
+        expected = [
+            ('d1', 1, 2, None),
+            ('d2', 10, 2, None),
+            ('d3', 1, 30, None),
+            ('d4', 1, 2, 40)]
+        query = DfltM.select().order_by(DfltM.name)
+        actual = [(d.name, d.dflt1, d.dflt2, d.dfltn) for d in query]
+        self.assertEqual(actual, expected)
+
     @requires_models(User, Tweet)
     def test_create(self):
         with self.assertQueryCount(1):
@@ -498,6 +517,14 @@ class TestModelAPIs(ModelTestCase):
         self.assertEqual(User.get_or_none(User.username == 'huey').username,
                          'huey')
         self.assertIsNone(User.get_or_none(User.username == 'foo'))
+
+    @requires_models(User, Tweet)
+    def test_model_select_get_or_none(self):
+        huey = self.add_user('huey')
+        huey_db = User.select().where(User.username == 'huey').get_or_none()
+        self.assertEqual(huey_db.username, 'huey')
+        self.assertIsNone(
+            User.select().where(User.username == 'foo').get_or_none())
 
     @requires_models(User, Color)
     def test_get_by_id(self):
@@ -3471,6 +3498,24 @@ class PGOnConflictTests(OnConflictTests):
             ('huey', 'cat', '123'),
             ('zaizee', 'cat', '124'),
             ('foo', 'baze', '125.1')])
+
+    @requires_upsert
+    @requires_models(OCTest)
+    def test_update_ignore_with_conflict_target(self):
+        query = OCTest.insert(a='foo', b=1).on_conflict(
+            action='IGNORE',
+            conflict_target=(OCTest.a,))
+        rowid1 = query.execute()
+        self.assertTrue(rowid1 is not None)
+
+        query.clone().execute()  # Nothing happens, insert is ignored.
+        self.assertEqual(OCTest.select().count(), 1)
+
+        OCTest.insert(a='foo', b=2).on_conflict_ignore().execute()
+        self.assertEqual(OCTest.select().count(), 1)
+
+        OCTest.insert(a='bar', b=1).on_conflict_ignore().execute()
+        self.assertEqual(OCTest.select().count(), 2)
 
     @requires_upsert
     @requires_models(OCTest)

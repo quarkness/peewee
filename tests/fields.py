@@ -1287,6 +1287,19 @@ class TestForeignKeyLazyLoad(ModelTestCase):
             b = NQ.create(name='b')
             bi = NQItem.create(nq=b, nq_lazy=b)
 
+    def test_doesnotexist_lazy_load(self):
+        n = NQ.create(name='n1')
+        i = NQItem.create(nq=n, nq_null=n, nq_lazy=n, nq_lazy_null=n)
+
+        i_db = NQItem.select(NQItem.id).where(NQItem.nq == n).get()
+        with self.assertQueryCount(0):
+            # Only raise DoesNotExist for non-nullable *and* lazy-load=True.
+            # Otherwise we just return None.
+            self.assertRaises(NQ.DoesNotExist, lambda: i_db.nq)
+            self.assertTrue(i_db.nq_null is None)
+            self.assertTrue(i_db.nq_lazy is None)
+            self.assertTrue(i_db.nq_lazy_null is None)
+
     def test_foreign_key_lazy_load(self):
         a1, a2, a3, a4 = (NQ.select()
                           .where(NQ.name.startswith('a'))
@@ -1312,6 +1325,17 @@ class TestForeignKeyLazyLoad(ModelTestCase):
 
         with self.assertQueryCount(1):
             self.assertEqual(bi.nq.id, b.id)
+
+    def test_fk_lazy_load_related_instance(self):
+        nq = NQ(name='b1')
+        nqi = NQItem(nq=nq, nq_null=nq, nq_lazy=nq, nq_lazy_null=nq)
+        nq.save()
+        nqi.save()
+
+        with self.assertQueryCount(1):
+            nqi_db = NQItem.get(NQItem.id == nqi.id)
+            self.assertEqual(nqi_db.nq_lazy, nq.id)
+            self.assertEqual(nqi_db.nq_lazy_null, nq.id)
 
     def test_fk_lazy_select_related(self):
         NA, NB, NC, ND = [NQ.alias(a) for a in ('na', 'nb', 'nc', 'nd')]

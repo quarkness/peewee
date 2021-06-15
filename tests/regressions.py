@@ -1455,6 +1455,9 @@ class TestQueryWithModelInstanceParam(ModelTestCase):
         b1 = FKF_B.create(fk_a_1=a1, fk_a_2=a1)
         b2 = FKF_B.create(fk_a_1=a2, fk_a_2=a2)
 
+        # Ensure that UPDATE works as expected as well.
+        b1.save()
+
         # See also keys.TestFKtoNonPKField test, which replicates much of this.
         args = (b1.fk_a_1, b1.fk_a_1_id, a1, a1.key)
         for arg in args:
@@ -1478,3 +1481,81 @@ class TestQueryWithModelInstanceParam(ModelTestCase):
                 'WHERE ("t1"."fk_a_2" = ?)'), [a1.id])
             b1_db = query.get()
             self.assertEqual(b1_db.id, b1.id)
+
+
+@skip_if(IS_SQLITE_OLD or IS_MYSQL)
+class TestModelSelectFromSubquery(ModelTestCase):
+    requires = [User]
+
+    def test_model_select_from_subquery(self):
+        for i in range(5):
+            User.create(username='u%s' % i)
+
+        UA = User.alias()
+        subquery = (UA.select()
+                    .where(UA.username.in_(('u0', 'u2', 'u4'))))
+
+        cte = (ValuesList([('u0',), ('u4',)], columns=['username'])
+               .cte('user_cte', columns=['username']))
+
+        query = (User
+                 .select(subquery.c.id, subquery.c.username)
+                 .from_(subquery)
+                 .join(cte, on=(subquery.c.username == cte.c.username))
+                 .with_cte(cte)
+                 .order_by(subquery.c.username.desc()))
+        self.assertEqual([u.username for u in query], ['u4', 'u0'])
+        self.assertTrue(isinstance(query[0], User))
+
+
+class CharPK(TestModel):
+    id = CharField(primary_key=True)
+    name = CharField(unique=True)
+
+    def __str__(self):
+        return self.name
+
+class CharFK(TestModel):
+    id = IntegerField(primary_key=True)
+    cpk = ForeignKeyField(CharPK, field=CharPK.name)
+
+
+class TestModelConversionRegression(ModelTestCase):
+    requires = [CharPK, CharFK]
+
+    def test_model_conversion_regression(self):
+        cpks = [CharPK.create(id=str(i), name='u%s' % i) for i in range(3)]
+
+        query = CharPK.select().where(CharPK.id << cpks)
+        self.assertEqual(sorted([c.id for c in query]), ['0', '1', '2'])
+
+        query = CharPK.select().where(CharPK.id.in_(list(CharPK.select())))
+        self.assertEqual(sorted([c.id for c in query]), ['0', '1', '2'])
+
+    def test_model_conversion_fk_retained(self):
+        cpks = [CharPK.create(id=str(i), name='u%s' % i) for i in range(3)]
+        cfks = [CharFK.create(id=i + 1, cpk='u%s' % i) for i in range(3)]
+
+        c0, c1, c2 = cpks
+        query = CharFK.select().where(CharFK.cpk << [c0, c2])
+        self.assertEqual(sorted([f.id for f in query]), [1, 3])
+
+
+class FKN_A(TestModel): pass
+class FKN_B(TestModel):
+    a = ForeignKeyField(FKN_A, null=True)
+
+class TestSetFKNull(ModelTestCase):
+    requires = [FKN_A, FKN_B]
+
+    def test_set_fk_null(self):
+        a1 = FKN_A.create()
+        a2 = FKN_A()
+        b1 = FKN_B(a=a1)
+        b2 = FKN_B(a=a2)
+
+        self.assertTrue(b1.a is a1)
+        self.assertTrue(b2.a is a2)
+        b1.a = b2.a = None
+        self.assertTrue(b1.a is None)
+        self.assertTrue(b2.a is None)

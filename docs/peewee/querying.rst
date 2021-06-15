@@ -581,9 +581,9 @@ For more information, see the documentation on:
 * :py:meth:`Model.get`
 * :py:meth:`Model.get_by_id`
 * :py:meth:`Model.get_or_none` - if no matching row is found, return ``None``.
-* :py:meth:`Model.first`
 * :py:meth:`Model.select`
 * :py:meth:`SelectBase.get`
+* :py:meth:`SelectBase.first` - return first record of result-set or ``None``.
 
 Create or get
 -------------
@@ -679,7 +679,7 @@ This will return all the rows in the *User* table:
 .. code-block:: pycon
 
     >>> for user in User.select():
-    ...     print user.username
+    ...     print(user.username)
     ...
     Charlie
     Huey

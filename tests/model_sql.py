@@ -23,7 +23,7 @@ class CKM(TestModel):
 
 class TestModelSQL(ModelDatabaseTestCase):
     database = get_in_memory_db()
-    requires = [Category, CKM, Note, Person, Relationship, Sample, User]
+    requires = [Category, CKM, Note, Person, Relationship, Sample, User, DfltM]
 
     def test_select(self):
         query = (Person
@@ -440,6 +440,21 @@ class TestModelSQL(ModelDatabaseTestCase):
             'INSERT INTO "sample" ("counter", "value") VALUES (?, ?), (?, ?)'),
             [3, 1., 2, 2.])
 
+    def test_insert_many_defaults_nulls(self):
+        data = [
+            {'name': 'd1'},
+            {'name': 'd2', 'dflt1': 10},
+            {'name': 'd3', 'dflt2': 30},
+            {'name': 'd4', 'dfltn': 40}]
+        fields = [DfltM.name, DfltM.dflt1, DfltM.dflt2, DfltM.dfltn]
+        self.assertSQL(DfltM.insert_many(data, fields=fields), (
+            'INSERT INTO "dflt_m" ("name", "dflt1", "dflt2", "dfltn") VALUES '
+            '(?, ?, ?, ?), (?, ?, ?, ?), (?, ?, ?, ?), (?, ?, ?, ?)'),
+            ['d1', 1, 2, None,
+             'd2', 10, 2, None,
+             'd3', 1, 30, None,
+             'd4', 1, 2, 40])
+
     def test_insert_many_list_with_fields(self):
         data = [(i,) for i in ('charlie', 'huey', 'zaizee')]
         query = User.insert_many(data, fields=[User.username])
@@ -854,6 +869,21 @@ class TestOnConflictSQL(ModelDatabaseTestCase):
             'ON CONFLICT ("a") '
             'DO UPDATE SET "b" = ("oc_test"."b" + ?) '
             'RETURNING "oc_test"."id"'), ['foo', 1, 0, 2])
+
+    def test_on_conflict_do_nothing(self):
+        query = OCTest.insert(a='foo', b=1).on_conflict(action='IGNORE')
+        self.assertSQL(query, (
+            'INSERT INTO "oc_test" ("a", "b", "c") VALUES (?, ?, ?) '
+            'ON CONFLICT DO NOTHING '
+            'RETURNING "oc_test"."id"'), ['foo', 1, 0])
+
+        query = OCTest.insert(a='foo', b=1).on_conflict(
+            conflict_target=(OCTest.a,),
+            action='IGNORE')
+        self.assertSQL(query, (
+            'INSERT INTO "oc_test" ("a", "b", "c") VALUES (?, ?, ?) '
+            'ON CONFLICT ("a") DO NOTHING '
+            'RETURNING "oc_test"."id"'), ['foo', 1, 0])
 
     def test_update_where_clause(self):
         # Add a new row with the given "a" value. If a conflict occurs,

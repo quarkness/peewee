@@ -53,6 +53,11 @@ try:
         pg_errors = None
 except ImportError:
     psycopg2 = pg_errors = None
+try:
+    from psycopg2.extras import register_uuid as pg_register_uuid
+    pg_register_uuid()
+except Exception:
+    pass
 
 mysql_passwd = False
 try:
@@ -65,7 +70,7 @@ except ImportError:
         mysql = None
 
 
-__version__ = '3.14.0'
+__version__ = '3.14.4'
 __all__ = [
     'AsIs',
     'AutoField',
@@ -1175,6 +1180,9 @@ class ColumnBase(Node):
     __mod__ = _e(OP.LIKE)
     __pow__ = _e(OP.ILIKE)
 
+    like = _e(OP.LIKE)
+    ilike = _e(OP.ILIKE)
+
     bin_and = _e(OP.BIN_AND)
     bin_or = _e(OP.BIN_OR)
     in_ = _e(OP.IN)
@@ -1452,6 +1460,7 @@ class Expression(ColumnBase):
         # Set up the appropriate converter if we have a field on the left side.
         if isinstance(node, Field) and raw_node._coerce:
             overrides['converter'] = node.db_value
+            overrides['is_fk_expr'] = isinstance(node, ForeignKeyField)
         else:
             overrides['converter'] = None
 
@@ -1510,8 +1519,11 @@ class SQL(ColumnBase):
         return ctx
 
 
-def Check(constraint):
-    return SQL('CHECK (%s)' % constraint)
+def Check(constraint, name=None):
+    check = SQL('CHECK (%s)' % constraint)
+    if not name:
+        return check
+    return NodeList((SQL('CONSTRAINT'), Entity(name), check))
 
 
 class Function(ColumnBase):
@@ -1521,7 +1533,7 @@ class Function(ColumnBase):
         self._filter = None
         self._order_by = None
         self._python_value = python_value
-        if name and name.lower() in ('sum', 'count', 'cast'):
+        if name and name.lower() in ('sum', 'count', 'cast', 'array_agg'):
             self._coerce = False
         else:
             self._coerce = coerce
@@ -2516,8 +2528,15 @@ class Update(_WriteQuery):
                         v = k.to_value(v)
                     else:
                         v = Value(v, unpack=False)
+                elif isinstance(v, Model) and isinstance(k, ForeignKeyField):
+                    # NB: we want to ensure that when passed a model instance
+                    # in the context of a foreign-key, we apply the fk-specific
+                    # adaptation of the model.
+                    v = k.to_value(v)
+
                 if not isinstance(v, Value):
                     v = qualify_names(v)
+
                 expressions.append(NodeList((k, SQL('='), v)))
 
             (ctx
@@ -2630,11 +2649,18 @@ class Insert(_WriteQuery):
                 if col not in seen:
                     columns.append(col)
 
+        fk_fields = set()
+        nullable_columns = set()
         value_lookups = {}
         for column in columns:
             lookups = [column, column.name]
-            if isinstance(column, Field) and column.name != column.column_name:
-                lookups.append(column.column_name)
+            if isinstance(column, Field):
+                if column.name != column.column_name:
+                    lookups.append(column.column_name)
+                if column.null:
+                    nullable_columns.add(column)
+                if isinstance(column, ForeignKeyField):
+                    fk_fields.add(column)
             value_lookups[column] = lookups
 
         ctx.sql(EnclosedNodeList(columns)).literal(' VALUES ')
@@ -2668,10 +2694,13 @@ class Insert(_WriteQuery):
                         val = defaults[column]
                         if callable_(val):
                             val = val()
+                    elif column in nullable_columns:
+                        val = None
                     else:
                         raise ValueError('Missing value for %s.' % column.name)
 
-                if not isinstance(val, Node):
+                if not isinstance(val, Node) or (isinstance(val, Model) and
+                                                 column in fk_fields):
                     val = Value(val, converter=converter, unpack=False)
                 values.append(val)
 
@@ -3861,7 +3890,9 @@ class PostgresqlDatabase(Database):
             FROM information_schema.table_constraints AS tc
             JOIN information_schema.key_column_usage AS kcu
                 ON (tc.constraint_name = kcu.constraint_name AND
-                    tc.constraint_schema = kcu.constraint_schema)
+                    tc.constraint_schema = kcu.constraint_schema AND
+                    tc.table_name = kcu.table_name AND
+                    tc.table_schema = kcu.table_schema)
             JOIN information_schema.constraint_column_usage AS ccu
                 ON (ccu.constraint_name = tc.constraint_name AND
                     ccu.constraint_schema = tc.constraint_schema)
@@ -3890,7 +3921,13 @@ class PostgresqlDatabase(Database):
     def conflict_update(self, oc, query):
         action = oc._action.lower() if oc._action else ''
         if action in ('ignore', 'nothing'):
-            return SQL('ON CONFLICT DO NOTHING')
+            parts = [SQL('ON CONFLICT')]
+            if oc._conflict_target:
+                parts.append(EnclosedNodeList([
+                    Entity(col) if isinstance(col, basestring) else col
+                    for col in oc._conflict_target]))
+            parts.append(SQL('DO NOTHING'))
+            return NodeList(parts)
         elif action and action != 'update':
             raise ValueError('The only supported actions for conflict '
                              'resolution with Postgresql are "ignore" or '
@@ -4398,11 +4435,11 @@ class ForeignKeyAccessor(FieldAccessor):
     def get_rel_instance(self, instance):
         value = instance.__data__.get(self.name)
         if value is not None or self.name in instance.__rel__:
-            if self.name not in instance.__rel__:
+            if self.name not in instance.__rel__ and self.field.lazy_load:
                 obj = self.rel_model.get(self.field.rel_field == value)
                 instance.__rel__[self.name] = obj
-            return instance.__rel__[self.name]
-        elif not self.field.null:
+            return instance.__rel__.get(self.name, value)
+        elif not self.field.null and self.field.lazy_load:
             raise self.rel_model.DoesNotExist
         return value
 
@@ -4418,18 +4455,10 @@ class ForeignKeyAccessor(FieldAccessor):
         else:
             fk_value = instance.__data__.get(self.name)
             instance.__data__[self.name] = obj
-            if obj != fk_value and self.name in instance.__rel__:
+            if (obj != fk_value or obj is None) and \
+               self.name in instance.__rel__:
                 del instance.__rel__[self.name]
         instance._dirty.add(self.name)
-
-
-class NoQueryForeignKeyAccessor(ForeignKeyAccessor):
-    def get_rel_instance(self, instance):
-        value = instance.__data__.get(self.name)
-        if value is not None:
-            return instance.__rel__.get(self.name, value)
-        elif not self.field.null:
-            raise self.rel_model.DoesNotExist
 
 
 class BackrefAccessor(object):
@@ -5145,17 +5174,14 @@ class BareField(Field):
 
 class ForeignKeyField(Field):
     accessor_class = ForeignKeyAccessor
+    backref_accessor_class = BackrefAccessor
 
     def __init__(self, model, field=None, backref=None, on_delete=None,
                  on_update=None, deferrable=None, _deferred=None,
                  rel_model=None, to_field=None, object_id_name=None,
-                 lazy_load=True, related_name=None, *args, **kwargs):
+                 lazy_load=True, constraint_name=None, related_name=None,
+                 *args, **kwargs):
         kwargs.setdefault('index', True)
-
-        # If lazy_load is disable, we use a different descriptor/accessor that
-        # will ensure we don't accidentally perform a query.
-        if not lazy_load:
-            self.accessor_class = NoQueryForeignKeyAccessor
 
         super(ForeignKeyField, self).__init__(*args, **kwargs)
 
@@ -5183,6 +5209,7 @@ class ForeignKeyField(Field):
         self.deferred = _deferred
         self.object_id_name = object_id_name
         self.lazy_load = lazy_load
+        self.constraint_name = constraint_name
 
     @property
     def field_type(self):
@@ -5243,15 +5270,19 @@ class ForeignKeyField(Field):
         if set_attribute:
             setattr(model, self.object_id_name, ObjectIdAccessor(self))
             if self.backref not in '!+':
-                setattr(self.rel_model, self.backref, BackrefAccessor(self))
+                setattr(self.rel_model, self.backref,
+                        self.backref_accessor_class(self))
 
     def foreign_key_constraint(self):
-        parts = [
+        parts = []
+        if self.constraint_name:
+            parts.extend((SQL('CONSTRAINT'), Entity(self.constraint_name)))
+        parts.extend([
             SQL('FOREIGN KEY'),
             EnclosedNodeList((self,)),
             SQL('REFERENCES'),
             self.rel_model,
-            EnclosedNodeList((self.rel_field,))]
+            EnclosedNodeList((self.rel_field,))])
         if self.on_delete:
             parts.append(SQL('ON DELETE %s' % self.on_delete))
         if self.on_update:
@@ -5279,7 +5310,8 @@ class DeferredForeignKey(Field):
         DeferredForeignKey._unresolved.add(self)
         super(DeferredForeignKey, self).__init__(
             column_name=kwargs.get('column_name'),
-            null=kwargs.get('null'))
+            null=kwargs.get('null'),
+            primary_key=kwargs.get('primary_key'))
 
     __hash__ = object.__hash__
 
@@ -5288,7 +5320,11 @@ class DeferredForeignKey(Field):
 
     def set_model(self, rel_model):
         field = ForeignKeyField(rel_model, _deferred=True, **self.field_kwargs)
-        self.model._meta.add_field(self.name, field)
+        if field.primary_key:
+            # NOTE: this calls add_field() under-the-hood.
+            self.model._meta.set_primary_key(self.name, field)
+        else:
+            self.model._meta.add_field(self.name, field)
 
     @staticmethod
     def resolve(model_cls):
@@ -6617,11 +6653,12 @@ class Model(with_metaclass(ModelBase, Node)):
         # model instance will return the wrong value; since we would return
         # the primary key for a given model instance.
         #
-        # This checks to see if we have a converter in the scope, and if so,
-        # hands the model instance to the converter rather than blindly
-        # grabbing the primary-key. In the event the provided converter fails
-        # to handle the model instance, then we will return the primary-key.
-        if ctx.state.converter is not None:
+        # This checks to see if we have a converter in the scope, and that we
+        # are converting a foreign-key expression. If so, we hand the model
+        # instance to the converter rather than blindly grabbing the primary-
+        # key. In the event the provided converter fails to handle the model
+        # instance, then we will return the primary-key.
+        if ctx.state.converter is not None and ctx.state.is_fk_expr:
             try:
                 return ctx.sql(Value(self, converter=ctx.state.converter))
             except (TypeError, ValueError):
@@ -6883,6 +6920,12 @@ class BaseModelSelect(_ModelQueryHelper):
             raise self.model.DoesNotExist('%s instance matching query does '
                                           'not exist:\nSQL: %s\nParams: %s' %
                                           (clone.model, sql, params))
+
+    def get_or_none(self, database=None):
+        try:
+            return self.get(database=database)
+        except self.model.DoesNotExist:
+            pass
 
     @Node.copy
     def group_by(self, *columns):
@@ -7563,9 +7606,13 @@ class ModelCursorWrapper(BaseModelCursorWrapper):
             objects[key] = constructor(__no_default__=True)
             object_list.append(objects[key])
 
+        default_instance = objects[self.model]
+
         set_keys = set()
         for idx, key in enumerate(self.column_keys):
-            instance = objects[key]
+            # Get the instance corresponding to the selected column/value,
+            # falling back to the "root" model instance.
+            instance = objects.get(key, default_instance)
             column = self.columns[idx]
             value = row[idx]
             if value is not None:

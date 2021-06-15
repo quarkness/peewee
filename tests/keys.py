@@ -5,6 +5,7 @@ from .base import IS_SQLITE
 from .base import ModelTestCase
 from .base import TestModel
 from .base import db
+from .base import get_in_memory_db
 from .base import requires_sqlite
 
 
@@ -453,3 +454,81 @@ class TestFKtoNonPKField(ModelTestCase):
                 'WHERE ("t1"."fk_a_id" = ?)'), ['a1'])
             b1_db = query.get()
             self.assertEqual(b1_db.id, b1.id)
+
+    def test_fk_to_non_pk_insert_update(self):
+        a1 = FK_A.create(key='a1')
+        b1 = FK_B.create(fk_a=a1)
+        self.assertEqual(FK_B.select().where(FK_B.fk_a == a1).count(), 1)
+
+        exprs = (
+            {FK_B.fk_a: a1},
+            {'fk_a': a1},
+            {FK_B.fk_a: a1.key},
+            {'fk_a': a1.key})
+        for n, expr in enumerate(exprs, 2):
+            self.assertTrue(FK_B.insert(expr).execute())
+            self.assertEqual(FK_B.select().where(FK_B.fk_a == a1).count(), n)
+
+        a2 = FK_A.create(key='a2')
+        exprs = (
+            {FK_B.fk_a: a2},
+            {'fk_a': a2},
+            {FK_B.fk_a: a2.key},
+            {'fk_a': a2.key})
+
+        b_list = list(FK_B.select().where(FK_B.fk_a == a1))
+        for i, (b, expr) in enumerate(zip(b_list[1:], exprs), 1):
+            self.assertTrue(FK_B.update(expr).where(FK_B.id == b.id).execute())
+            self.assertEqual(FK_B.select().where(FK_B.fk_a == a2).count(), i)
+
+
+class TestDeferredForeignKeyIntegration(ModelTestCase):
+    database = get_in_memory_db()
+
+    def test_deferred_fk_simple(self):
+        class Base(TestModel):
+            class Meta:
+                database = self.database
+        class DFFk(Base):
+            fk = DeferredForeignKey('DFPk')
+
+        # Deferred key not bound yet.
+        self.assertTrue(isinstance(DFFk.fk, DeferredForeignKey))
+
+        class DFPk(Base): pass
+
+        # Deferred key is bound correctly.
+        self.assertTrue(isinstance(DFFk.fk, ForeignKeyField))
+        self.assertEqual(DFFk.fk.rel_model, DFPk)
+        self.assertEqual(DFFk._meta.refs, {DFFk.fk: DFPk})
+        self.assertEqual(DFFk._meta.backrefs, {})
+        self.assertEqual(DFPk._meta.refs, {})
+        self.assertEqual(DFPk._meta.backrefs, {DFFk.fk: DFFk})
+        self.assertSQL(DFFk._schema._create_table(False), (
+            'CREATE TABLE "df_fk" ("id" INTEGER NOT NULL PRIMARY KEY, '
+            '"fk_id" INTEGER NOT NULL)'), [])
+
+    def test_deferred_fk_as_pk(self):
+        class Base(TestModel):
+            class Meta:
+                database = self.database
+        class DFFk(Base):
+            fk = DeferredForeignKey('DFPk', primary_key=True)
+
+        # Deferred key not bound yet.
+        self.assertTrue(isinstance(DFFk.fk, DeferredForeignKey))
+        self.assertTrue(DFFk._meta.primary_key is DFFk.fk)
+
+        class DFPk(Base): pass
+
+        # Resolved and primary-key set correctly.
+        self.assertTrue(isinstance(DFFk.fk, ForeignKeyField))
+        self.assertTrue(DFFk._meta.primary_key is DFFk.fk)
+
+        self.assertEqual(DFFk.fk.rel_model, DFPk)
+        self.assertEqual(DFFk._meta.refs, {DFFk.fk: DFPk})
+        self.assertEqual(DFFk._meta.backrefs, {})
+        self.assertEqual(DFPk._meta.refs, {})
+        self.assertEqual(DFPk._meta.backrefs, {DFFk.fk: DFFk})
+        self.assertSQL(DFFk._schema._create_table(False), (
+            'CREATE TABLE "df_fk" ("fk_id" INTEGER NOT NULL PRIMARY KEY)'), [])

@@ -7,7 +7,54 @@ https://github.com/coleifer/peewee/releases
 
 ## master
 
-[View commits](https://github.com/coleifer/peewee/compare/3.14.0...master)
+[View commits](https://github.com/coleifer/peewee/compare/3.14.4...master)
+
+## 3.14.4
+
+This release contains an important fix for a regression introduced by commit
+ebe3ad5, which affected the way model instances are converted to parameters for
+use in expressions within a query. The bug could manifest when code uses model
+instances as parameters in expressions against fields that are not
+foreign-keys.
+
+The issue is described in #2376.
+
+[View commits](https://github.com/coleifer/peewee/compare/3.14.3...3.14.4)
+
+## 3.14.3
+
+This release contains a single fix for ensuring NULL values are inserted when
+issuing a bulk-insert of heterogeneous dictionaries which may be missing
+explicit NULL values. Fixes issue #2638.
+
+[View commits](https://github.com/coleifer/peewee/compare/3.14.2...3.14.3)
+
+## 3.14.2
+
+This is a small release mainly to get some fixes out.
+
+* Support for named `Check` and foreign-key constraints.
+* Better foreign-key introspection for CockroachDB (and Postgres).
+* Register UUID adapter for Postgres.
+* Add `fn.array_agg()` to blacklist for automatic value coercion.
+
+[View commits](https://github.com/coleifer/peewee/compare/3.14.1...3.14.2)
+
+## 3.14.1
+
+This release contains primarily bugfixes.
+
+* Properly delegate to a foreign-key field's `db_value()` function when
+  converting model instances. #2304.
+* Strip quote marks and parentheses from column names returned by sqlite
+  cursor when a function-call is projected without an alias. #2305.
+* Fix `DataSet.create_index()` method, #2319.
+* Fix column-to-model mapping in model-select from subquery with joins, #2320.
+* Improvements to foreign-key lazy-loading thanks @conqp, #2328.
+* Preserve and handle `CHECK()` constraints in Sqlite migrator, #2343.
+* Add `stddev` aggregate function to collection of sqlite user-defined funcs.
+
+[View commits](https://github.com/coleifer/peewee/compare/3.14.0...3.14.1)
 
 ## 3.14.0
 
@@ -1849,7 +1896,7 @@ I'm excited about this release, as in addition to a number of new features and b
 
 Biggest news: peewee has a new logo!
 
-![](http://media.charlesleifer.com/blog/photos/peewee-logo-bold.png)
+![](https://media.charlesleifer.com/blog/photos/peewee-logo-bold.png)
 
 * Small documentation updates here and there.
 
